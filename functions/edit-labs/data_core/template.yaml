@@ -9,6 +9,7 @@ Parameters:
   S3BucketName:
     Type: String
     Description: S3 bucket name edit-labs 
+    
 
 Resources:
   # The SSM Parameters
