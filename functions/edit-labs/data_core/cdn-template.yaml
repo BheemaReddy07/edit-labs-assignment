@@ -134,7 +134,7 @@ Outputs:
   EditLabsBucketName:
     Description: The name of the created S3 bucket
     Value: !Ref EditLabsBucket
-  
+    
   CloudFrontDomainName:
     Description: CloudFront distribution domain
     Value: !GetAtt CloudFrontDistribution.DomainName

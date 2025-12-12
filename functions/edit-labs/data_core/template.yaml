@@ -15,7 +15,7 @@ Resources:
   ParameterGlideeTablesEditlabs:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub /${ENV}/tables/edit-labs
+      Name: !Sub /${ENV}/tables/edit-labs   
       Type: String
       Value: edit-labs
       Description: editlabs table
