@@ -61,16 +61,16 @@ jobs:
           # Set AWS Credentials based on ENV
           case "${ENV_LOWER}" in
             dev)
-              ACCOUNT_ID="451947743528"
-              ROLE_NAME="GitHubDeployRole-dev"
+              ACCOUNT_ID="357842185444"
+              ROLE_NAME="GitHubActionsDeployRole-editlabs"
               ;;
             stage)
-              ACCOUNT_ID="440913182228"
-              ROLE_NAME="GitHubDeployRole-stage"
+              ACCOUNT_ID="357842185444"
+              ROLE_NAME="GitHubActionsDeployRole-editlabs"
               ;;
             prod)
-              ACCOUNT_ID="695474668858"
-              ROLE_NAME="GitHubDeployRole-prod"
+              ACCOUNT_ID="357842185444"
+              ROLE_NAME="GitHubActionsDeployRole-editlabs"
               ;;
           esac
 
