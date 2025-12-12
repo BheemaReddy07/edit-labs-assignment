@@ -1,17 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: CloudFront Distribution and S3 bucket for static site + API Gateway origin with Custom Domain
+Description: CloudFront Distribution and S3 bucket for static site + API Gateway origin (no custom domain)
 
 Parameters:
   BucketName:
     Type: String
     Description: Name for the S3 bucket to create for static hosting.
-  CustomDomainName:
-    Type: String
-    Description: The custom domain name (e.g. dev.glidee.ai)
-  ACMCertificateArn:
-    Type: String
-    Description: ACM Certificate ARN in us-east-1 for CloudFront
-  ENV: # Added for completeness/future use, though not used in Resources here
+  ENV:
     Type: String
     Description: "The deployment environment (dev, stage, prod)."
 
@@ -37,7 +31,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      # Best Practice: Add bucket encryption
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -56,30 +49,18 @@ Resources:
               Service: cloudfront.amazonaws.com
             Action: s3:GetObject
             Resource: !Sub "arn:aws:s3:::${EditLabsBucket}/*"
-            Condition:
-              StringEquals:
-                # This condition is correct for the S3/OAC setup.
-                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
 
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: Static React App + API Gateway Routing with Custom Domain
-        Aliases:
-          - !Ref CustomDomainName
+        Comment: Static React App + API Gateway Routing (no custom domain)
         DefaultRootObject: index.html
-        ViewerCertificate:
-          AcmCertificateArn: !Ref ACMCertificateArn
-          SslSupportMethod: sni-only
-          MinimumProtocolVersion: TLSv1.2_2021
         Origins:
           - Id: S3Origin
-            # Use the regional endpoint for secure OAC configurations
-            DomainName: !GetAtt EditLabsBucket.RegionalDomainName 
-            S3OriginConfig:
-              OriginAccessIdentity: ""
+            DomainName: !GetAtt EditLabsBucket.RegionalDomainName
+            S3OriginConfig: {}
             OriginAccessControlId: !GetAtt OriginAccessControl.Id
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
@@ -98,7 +79,7 @@ Resources:
             ResponseCode: 200
             ErrorCachingMinTTL: 300
 
-#ssm parameters
+  # SSM parameter for the bucket name
   ParameterGlideeBucketsEditlabs:
     Type: AWS::SSM::Parameter
     Properties:
@@ -108,33 +89,11 @@ Resources:
       Description: Editlabs bucket for EditLabs
       Tier: Standard
 
-
-  # ParameterGlideeOrgMetaDataCDNDistributionId:
-  #   Type: AWS::SSM::Parameter
-  #   Properties:
-  #     Name: !Sub /${ENV}/cdn/distribution_id
-  #     Type: String
-  #     Value: !Ref CloudFrontDistribution
-  #     Description:  Org Metadata CDN Distribution ID
-  #     Tier: Standard     
-
-  # ParameterOrgMetaDataDistributionArn:
-  #   Type: AWS::SSM::Parameter
-  #   Properties:
-  #     Name: !Sub /${ENV}/cdn/distribution_arn
-  #     Type: String
-  #     Value: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
-  #     Description: Org Metadata CDN Distribution ARN
-  #     Tier: Standard   
-
 Outputs:
-  # --------------------------------------------------------
-  # Outputs for Parent Stack to reference
-  # --------------------------------------------------------
   EditLabsBucketName:
     Description: The name of the created S3 bucket
     Value: !Ref EditLabsBucket
-    
+
   CloudFrontDomainName:
     Description: CloudFront distribution domain
     Value: !GetAtt CloudFrontDistribution.DomainName
@@ -142,7 +101,3 @@ Outputs:
   CloudFrontDistributionID:
     Description: CloudFront distribution ID
     Value: !Ref CloudFrontDistribution
-  
-  CustomDomainURL:
-    Description: Custom domain URL
-    Value: !Sub "https://${CustomDomainName}"
