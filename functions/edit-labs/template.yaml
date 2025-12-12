@@ -24,6 +24,7 @@ Mappings:
       stage: 'edit-labs-stage-bheema'
       dev: 'edit-labs-dev-bheema'
 
+
 Resources:
   # 0. Data Core Stack (DynamoDB, S3, CDN)
   DataCoreStack:
