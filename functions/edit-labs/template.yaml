@@ -20,9 +20,9 @@ Mappings:
     # 2. Define a top-level key for the specific mapping (can be anything, like 'Names')
     Names:
       # 3. Define the Environment-to-Name pairs
-      prod: 'edit-labs'
-      stage: 'edit-labs-stage'
-      dev: 'edit-labs-dev'
+      prod: 'edit-labs-bheema'
+      stage: 'edit-labs-stage-bheema'
+      dev: 'edit-labs-dev-bheema'
 
 Resources:
   # 0. Data Core Stack (DynamoDB, S3, CDN)
