@@ -1,0 +1,46 @@
+version = 0.1
+
+# ---------------- DEV -----------------
+[dev.deploy.parameters]
+stack_name = "edit-labs-pipeline-dev"
+resolve_s3 = true
+s3_prefix = "edit-labs-pipeline-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = '''
+ENV="dev"
+FunctionPrefix="service"
+ProjectName="edit-labs"
+'''
+image_repositories = []
+
+# ---------------- STAGE -----------------
+[stage.deploy.parameters]
+stack_name = "edit-labs-pipeline-stage"
+resolve_s3 = true
+s3_prefix = "edit-labs-pipeline-stage"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = '''
+ENV="stage"
+FunctionPrefix="service"
+ProjectName="edit-labs"
+'''
+image_repositories = []
+
+# ---------------- PROD -----------------
+[prod.deploy.parameters]
+stack_name = "edit-labs-pipeline"
+resolve_s3 = true
+s3_prefix = "edit-labs-pipeline-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = '''
+ENV="prod"
+FunctionPrefix="service"
+ProjectName="edit-labs"
+'''
+image_repositories = []

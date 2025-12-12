@@ -1,0 +1,286 @@
+name: Deploy Full Stack (Terraform + SAM)
+
+on:
+  push:
+    branches:
+      - develop
+      - stage
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: edit-labs
+  TERRAFORM_BASE_DIR: functions/edit-labs/process/terraform
+  DOCKER_BUILD_CONTEXT: functions/edit-labs/process/process-raw-video
+  SAM_TEMPLATE_DIR: functions/edit-labs
+
+jobs:
+  deploy-terraform:
+    name: Deploy Terraform Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set_env.outputs.ENV_LOWER }}
+      role_arn: ${{ steps.set_env.outputs.ROLE_ARN }}
+      aws_account_id: ${{ steps.set_env.outputs.AWS_ACCOUNT_ID }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set Environment Variables
+        id: set_env
+        run: |
+          # Determine Environment (input takes precedence over branch)
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ENV_LOWER="${{ github.event.inputs.environment }}"
+          else
+            # Map branch name to environment
+            BRANCH_NAME="${GITHUB_REF_NAME}"
+            case "${BRANCH_NAME}" in
+              develop|dev) ENV_LOWER="dev" ;;
+              stage) ENV_LOWER="stage" ;;
+              main|prod) ENV_LOWER="prod" ;;
+              *) echo "Unsupported branch: ${BRANCH_NAME}"; exit 1 ;;
+            esac
+          fi
+          
+          # Set AWS Credentials based on ENV
+          case "${ENV_LOWER}" in
+            dev)
+              ACCOUNT_ID="451947743528"
+              ROLE_NAME="GitHubDeployRole-dev"
+              ;;
+            stage)
+              ACCOUNT_ID="440913182228"
+              ROLE_NAME="GitHubDeployRole-stage"
+              ;;
+            prod)
+              ACCOUNT_ID="695474668858"
+              ROLE_NAME="GitHubDeployRole-prod"
+              ;;
+          esac
+
+          # Set output variables
+          echo "ENV_LOWER=$ENV_LOWER" >> $GITHUB_OUTPUT
+          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          echo "ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/$ROLE_NAME" >> $GITHUB_OUTPUT
+          echo "ECR_REPOSITORY_NAME=my-app-repo-$ENV_LOWER" >> $GITHUB_OUTPUT
+          
+          # Set environment variables
+          echo "ENV=$ENV_LOWER" >> $GITHUB_ENV
+          echo "ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/$ROLE_NAME" >> $GITHUB_ENV
+          echo "ECR_REPOSITORY_NAME=my-app-repo-$ENV_LOWER" >> $GITHUB_ENV
+          
+          # Set Terraform state bucket name
+          if [ "$ENV_LOWER" == "prod" ]; then
+            echo "TF_STATE_BUCKET=bucketforterraform-23" >> $GITHUB_ENV
+          else
+            echo "TF_STATE_BUCKET=bucketforterraform-23-$ENV_LOWER" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.set_env.outputs.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-terraform-deploy-${{ env.ENV }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Ensure Terraform State Bucket Exists
+        run: |
+          BUCKET_NAME="${{ env.TF_STATE_BUCKET }}"
+          REGION="${{ env.AWS_REGION }}"
+          
+          echo "Checking if Terraform state bucket $BUCKET_NAME exists..."
+          
+          if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+            echo "✅ Bucket $BUCKET_NAME already exists."
+          else
+            echo "📦 Bucket $BUCKET_NAME does not exist. Creating..."
+            aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$REGION"
+            
+            echo "✅ Bucket $BUCKET_NAME created successfully."
+            
+            # Enable versioning for state bucket (best practice)
+            echo "🔄 Enabling versioning on $BUCKET_NAME..."
+            aws s3api put-bucket-versioning --bucket "$BUCKET_NAME" --versioning-configuration Status=Enabled
+            
+            echo "✅ Versioning enabled."
+          fi
+
+      - name: Terraform Init
+        working-directory: ${{ env.TERRAFORM_BASE_DIR }}/environments/${{ env.ENV }}
+        run: |
+          terraform init -backend-config="key=terraform/state/${{ env.ENV }}/terraform.tfstate"
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TERRAFORM_BASE_DIR }}/environments/${{ env.ENV }}
+        run: |
+          terraform apply -var-file=${{ env.ENV }}.tfvars -auto-approve
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        
+      - name: Build and push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPO: ${{ env.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building image for environment: ${{ env.ENV }}"
+          
+          # Build and tag with SHA
+          docker build -t $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG $DOCKER_BUILD_CONTEXT
+
+          # Tag with latest
+          docker tag $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG \
+                     $ECR_REGISTRY/$ECR_REPO:latest
+
+          # Push both tags
+          docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPO:latest
+
+      - name: Terraform Deployment Summary
+        run: |
+          echo "## ✅ Terraform Infrastructure Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ env.ENV }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **AWS Account** | \`${{ steps.set_env.outputs.AWS_ACCOUNT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Image** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  deploy-sam:
+    name: Deploy SAM Parent Stack
+    runs-on: ubuntu-latest
+    needs: deploy-terraform
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          ENV="${{ needs.deploy-terraform.outputs.environment }}"
+          ROLE_ARN="${{ needs.deploy-terraform.outputs.role_arn }}"
+          
+          echo "ENV=$ENV" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
+          echo "ROLE_ARN=$ROLE_ARN" >> $GITHUB_ENV
+          
+          # Set stack name and SAM config environment
+          case "${ENV}" in
+            dev)
+              echo "STACK_NAME=backend-stack-app-dev" >> $GITHUB_ENV
+              echo "SAM_CONFIG_ENV=dev" >> $GITHUB_ENV
+              ;;
+            stage)
+              echo "STACK_NAME=backend-stack-app-stage" >> $GITHUB_ENV
+              echo "SAM_CONFIG_ENV=stage" >> $GITHUB_ENV
+              ;;
+            prod)
+              echo "STACK_NAME=backend-stack-app" >> $GITHUB_ENV
+              echo "SAM_CONFIG_ENV=prod" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-sam-deploy-${{ env.ENV }}
+          role-duration-seconds: 3600
+
+      - name: Show machine arch (debug)
+        run: uname -m
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Force Docker to use arm64 images
+        run: echo "DOCKER_DEFAULT_PLATFORM=linux/arm64" >> $GITHUB_ENV
+
+      - name: Build SAM application
+        working-directory: ${{ env.SAM_TEMPLATE_DIR }}
+        run: |
+          sam build --use-container --build-image public.ecr.aws/sam/build-python3.13:latest-arm64
+
+      - name: Deploy SAM application
+        working-directory: ${{ env.SAM_TEMPLATE_DIR }}
+        run: |
+          sam deploy \
+            --config-env ${{ env.SAM_CONFIG_ENV }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "ENV=${{ env.ENV }}"
+
+      - name: Get stack outputs
+        id: stack-outputs
+        run: |
+          echo "Getting outputs for stack: ${{ env.STACK_NAME }}"
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs' \
+            --output table || echo "Stack outputs not available yet"
+
+      - name: SAM Deployment Summary
+        run: |
+          echo "## ✅ SAM Parent Stack Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ env.ENV }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Region** | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Stack** | ${{ env.STACK_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **AWS Account** | \`${{ needs.deploy-terraform.outputs.aws_account_id }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  deployment-complete:
+    name: Deployment Complete
+    runs-on: ubuntu-latest
+    needs: [deploy-terraform, deploy-sam]
+    
+    steps:
+      - name: Final Summary
+        run: |
+          echo "## 🎉 Full Stack Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both Terraform infrastructure and SAM parent stack have been successfully deployed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ needs.deploy-terraform.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Account**: \`${{ needs.deploy-terraform.outputs.aws_account_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

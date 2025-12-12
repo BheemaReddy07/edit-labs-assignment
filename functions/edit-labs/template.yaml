@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Parent stack for Edit Labs Service
+
+Parameters:
+  ENV:
+    Type: String
+    AllowedValues: [prod, stage, dev]
+  
+  FunctionPrefix:
+    Type: String
+    Default: service
+    
+  ProjectName:
+    Type: String
+    Default: edit-labs
+
+Mappings:
+  EditLabsBucketNameMap:
+    # 2. Define a top-level key for the specific mapping (can be anything, like 'Names')
+    Names:
+      # 3. Define the Environment-to-Name pairs
+      prod: 'edit-labs'
+      stage: 'edit-labs-stage'
+      dev: 'edit-labs-dev'
+
+Resources:
+  # 0. Data Core Stack (DynamoDB, S3, CDN)
+  DataCoreStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: data_core/template.yaml
+      Parameters:
+        ENV: !Ref ENV
+        S3BucketName: !FindInMap [EditLabsBucketNameMap, Names, !Ref ENV]
+
+  # 1. Pipeline Stack (Creates State Machine & writes ARN to SSM)
+  PipelineStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: edit-labs-pipeline/template.yaml
+      Parameters:
+        ENV: !Ref ENV
+        FunctionPrefix: !Ref FunctionPrefix
+        ProjectName: !Ref ProjectName
+    DependsOn: [DataCoreStack]
+
+ 
+

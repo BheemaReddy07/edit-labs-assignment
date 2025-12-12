@@ -1,0 +1,109 @@
+{
+  "Comment": "Pipeline to process a raw video submission from Edit Labs.",
+  "StartAt": "ConstructPayload",
+  "States": {
+    "ConstructPayload": {
+      "Type": "Pass",
+      "Comment": "Formats the S3 trigger input for the ECS task environment.",
+      "Parameters": {
+        "JOB_ID.$": "$.project_id",
+        "PAYLOAD_JSON.$": "States.JsonToString($)"
+      },
+      "ResultPath": "$.TaskInput",
+      "Next": "GetYouTubeApiKey"
+    },
+    "GetYouTubeApiKey": {
+      "Type": "Task",
+      "Comment": "Retrieve YouTube API key from SSM Parameter Store",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name": "${YouTubeApiKeySSMPath}",
+        "WithDecryption": true
+      },
+      "ResultPath": "$.YouTubeApiKeyResult",
+      "Next": "GetGeminiApiKey"
+    },
+    "GetGeminiApiKey": {
+      "Type": "Task",
+      "Comment": "Retrieve Gemini API key from SSM Parameter Store",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name": "${GeminiApiKeySSMPath}",
+        "WithDecryption": true
+      },
+      "ResultPath": "$.GeminiApiKeyResult",
+      "Next": "GetEcsConfig"
+    },
+    "GetEcsConfig": {
+      "Type": "Task",
+      "Comment": "Retrieve ECS Configuration (Subnets, SGs, TaskDef) from SSM at runtime",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameters",
+      "Parameters": {
+        "Names": [
+          "${ECSClusterArnPath}",
+          "${ECSTaskDefinitionArnPath}",
+          "${EcsContainerNamePath}",
+          "${ECSSubnetsPath}",
+          "${ECSSecurityGroupsPath}"
+        ]
+      },
+      "ResultPath": "$.EcsConfig",
+      "Next": "ExtractEcsConfig"
+    },
+    "ExtractEcsConfig": {
+      "Type": "Pass",
+      "Parameters": {
+        "ClusterArn.$": "$.EcsConfig.Parameters[?(@.Name=='${ECSClusterArnPath}')].Value",
+        "TaskDefArn.$": "$.EcsConfig.Parameters[?(@.Name=='${ECSTaskDefinitionArnPath}')].Value",
+        "ContainerName.$": "$.EcsConfig.Parameters[?(@.Name=='${EcsContainerNamePath}')].Value",
+        "Subnets.$": "$.EcsConfig.Parameters[?(@.Name=='${ECSSubnetsPath}')].Value",
+        "SecurityGroups.$": "$.EcsConfig.Parameters[?(@.Name=='${ECSSecurityGroupsPath}')].Value"
+      },
+      "ResultPath": "$.EcsSettings",
+      "Next": "ProcessVideoEcsTask"
+    },
+    "ProcessVideoEcsTask": {
+      "Type": "Task",
+      "Comment": "Run the Process-raw-video ECS Fargate task and wait for completion.",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster.$": "$.EcsSettings.ClusterArn[0]",
+        "TaskDefinition.$": "$.EcsSettings.TaskDefArn[0]",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets.$": "States.StringSplit($.EcsSettings.Subnets[0], ',')",
+            "SecurityGroups.$": "States.StringSplit($.EcsSettings.SecurityGroups[0], ',')",
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name.$": "$.EcsSettings.ContainerName[0]",
+              "Environment": [
+                {
+                  "Name": "JOB_ID",
+                  "Value.$": "$.TaskInput.JOB_ID"
+                },
+                {
+                  "Name": "PAYLOAD_JSON",
+                  "Value.$": "$.TaskInput.PAYLOAD_JSON"
+                },
+                {
+                  "Name": "GEMINI_API_KEY",
+                  "Value.$": "$.GeminiApiKeyResult.Parameter.Value"
+                },
+                {
+                  "Name": "YOUTUBE_API_KEY",
+                  "Value.$": "$.YouTubeApiKeyResult.Parameter.Value"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "End": true
+    }
+  }
+}

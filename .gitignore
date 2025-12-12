@@ -1,0 +1,7 @@
+**/.aws-sam/
+.aws-sam/
+functions/**/.aws-sam/
+functions/.aws-sam/
+functions/SES_emails/.aws-sam
+functions/save_ideas/.aws-sam
+/.claude

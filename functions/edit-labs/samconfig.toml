@@ -1,0 +1,39 @@
+# samconfig.toml
+
+version = 0.1
+
+[dev.deploy.parameters]
+stack_name = "edit-labs-dev"
+resolve_s3 = true   
+s3_prefix = "edit-labs-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+disable_rollback = false
+image_repositories = []
+tags = "version='0.1'"
+parameter_overrides = "ENV=\"dev\" FunctionPrefix=\"service\" ProjectName=\"edit-labs\""
+
+[stage.deploy.parameters]
+stack_name = "edit-labs-stage"
+resolve_s3 = true
+s3_prefix = "edit-labs-stage"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+disable_rollback = false
+image_repositories = []
+tags = "version='0.1'"
+parameter_overrides = "ENV=\"stage\" FunctionPrefix=\"service\" ProjectName=\"edit-labs\""
+
+[prod.deploy.parameters]
+stack_name = "edit-labs"
+resolve_s3 = true   
+s3_prefix = "edit-labs"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+disable_rollback = false
+image_repositories = []
+tags = "version='0.1'"
+parameter_overrides = "ENV=\"prod\" FunctionPrefix=\"service\" ProjectName=\"edit-labs\""

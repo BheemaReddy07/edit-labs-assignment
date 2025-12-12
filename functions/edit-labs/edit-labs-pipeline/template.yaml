@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: Edit Labs Step Function pipeline — all config resolved directly from SSM.
+
+Parameters:
+  ENV:
+    Type: String
+    AllowedValues: [prod, stage, dev]
+    Default: prod
+
+  FunctionPrefix:
+    Type: String
+    Default: service
+
+  ProjectName:
+    Type: String
+    Default: edit-labs
+
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: edit-labs-pipeline
+        POWERTOOLS_METRICS_NAMESPACE: EditLabs
+        ENVIRONMENT: !Ref ENV
+
+
+Resources:
+
+  # -------------------------------------------------------
+  # IAM ROLE
+  # -------------------------------------------------------
+  StateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${FunctionPrefix}-${ProjectName}-sfn-role-${ENV}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: !Sub "${FunctionPrefix}-${ProjectName}-policy-${ENV}"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+
+              # --------------------------------------------------
+              # SSM PERMISSIONS FOR ALL PARAMETERS THIS STACK USES
+              # --------------------------------------------------
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  # ECS config
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/cluster-arn"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/task-definition-arn"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/container-name"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/subnets"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/security-groups"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/execution-role-arn"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${ENV}/ecs/task-role-arn"
+
+                  # API keys
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ENV}/keys/youtube_api"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ENV}/keys/gemini_api"
+
+                  # TABLE NAMES RESOLVED FROM SSM
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ENV}/tables/edit-labs"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ENV}/tables/recommendations"
+
+              # --------------------------------------------------
+              # ECS RunTask
+              # --------------------------------------------------
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub "{{resolve:ssm:/${ProjectName}/${ENV}/ecs/task-definition-arn}}"
+
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeTasks
+                  - ecs:StopTask
+                Resource: "*"
+
+              # --------------------------------------------------
+              # PASS ROLES
+              # --------------------------------------------------
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "{{resolve:ssm:/${ProjectName}/${ENV}/ecs/execution-role-arn}}"
+                  - !Sub "{{resolve:ssm:/${ProjectName}/${ENV}/ecs/task-role-arn}}"
+                Condition:
+                  StringLike:
+                    iam:PassedToService: "ecs-tasks.amazonaws.com"
+
+              # --------------------------------------------------
+              # DynamoDB permissions using direct SSM-resolved table names
+              # --------------------------------------------------
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/{{resolve:ssm:/${ENV}/tables/edit-labs}}"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/{{resolve:ssm:/${ENV}/tables/recommendations}}"
+
+              # --------------------------------------------------
+              # EventBridge
+              # --------------------------------------------------
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                  - events:DeleteRule
+                  - events:RemoveTargets
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule*"
+
+
+  # -------------------------------------------------------
+  # STATE MACHINE
+  # -------------------------------------------------------
+  EditLabsPipelineStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${FunctionPrefix}-${ProjectName}-pipeline-${ENV}"
+      Role: !GetAtt StateMachineExecutionRole.Arn
+      DefinitionUri: statemachine.asl.json
+      Type: STANDARD
+
+      DefinitionSubstitutions:
+
+        ECSClusterArnPath: !Sub "/${ProjectName}/${ENV}/ecs/cluster-arn"
+        ECSTaskDefinitionArnPath: !Sub "/${ProjectName}/${ENV}/ecs/task-definition-arn"
+        EcsContainerNamePath: !Sub "/${ProjectName}/${ENV}/ecs/container-name"
+        ECSSubnetsPath: !Sub "/${ProjectName}/${ENV}/ecs/subnets"
+        ECSSecurityGroupsPath: !Sub "/${ProjectName}/${ENV}/ecs/security-groups"
+
+        YouTubeApiKeySSMPath: !Sub "/${ENV}/keys/youtube_api"
+        GeminiApiKeySSMPath: !Sub "/${ENV}/keys/gemini_api"
+
+  StateMachineArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ENV}/sfn/${ProjectName}-pipeline-arn"
+      Type: String
+      Value: !Ref EditLabsPipelineStateMachine
+      Description: editlabs pipeline arn
+      Tier: Standard
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref EditLabsPipelineStateMachine
+  StateMachineRoleArn:
+    Value: !GetAtt StateMachineExecutionRole.Arn
+    

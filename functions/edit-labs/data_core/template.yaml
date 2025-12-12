@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Data core resources for database and storage.
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  ENV:
+    Type: String
+    Description: "The deployment environment (dev, stage, prod)."
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name edit-labs 
+
+Resources:
+  # The SSM Parameters
+  ParameterGlideeTablesEditlabs:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ENV}/tables/edit-labs
+      Type: String
+      Value: edit-labs
+      Description: editlabs table
+      Tier: Standard
+
+
+
+  # DynamoDB Tables
+  
+  EditLabsDDBTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: edit-labs 
+      AttributeDefinitions:
+      - AttributeName: org_id
+        AttributeType: S
+      - AttributeName: project_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: org_id
+        KeyType: HASH
+      - AttributeName: project_id
+        KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+  
+  EditLabsCDNApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: cdn-template.yaml
+      Parameters:
+        BucketName: !Ref S3BucketName
+        ENV: !Ref ENV
+        CustomDomainName: !Sub '{{resolve:ssm:/${ENV}/cdn/edit-labs/domain}}'
+        ACMCertificateArn: !Sub '{{resolve:ssm:/${ENV}/acm/edit-labs/arn}}'
+
+  ## identity pool
+  IdentityAuthPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "glidee-identity-pool"
+      AllowUnauthenticatedIdentities: false # only logged-in users can use AWS resources
+      CognitoIdentityProviders:
+        - ClientId: !Sub  '{{resolve:ssm:/${ENV}/auth/cognito_userpool_client_id}}'
+          ProviderName: !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/{{resolve:ssm:/${ENV}/auth/cognito_userpool_id}}'
+          ServerSideTokenCheck: true
+
+  # --------------------------------------------------------------
+  # Auth Role for Identity Pool
+  # (Will allow authenticated users to upload directly to S3)
+  # --------------------------------------------------------------
+  IdentityPoolRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "identity-editlabs-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref IdentityAuthPool
+              "ForAnyValue:StringLike":
+                cognito-identity.amazonaws.com:amr: authenticated
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonCognitoPowerUser # helpful for Cognito federation
+
+  # --------------------------------------------------------------
+  # IAM Inline Policy (S3 Upload Permission for AUTHENTICATED USERS)
+  # Replace YOUR_BUCKET_NAME below
+  # --------------------------------------------------------------
+  IdentityPoolAuthRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyName: !Sub "s3-upload-policy"
+      Roles:
+        - !Ref IdentityPoolRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowUploadsToS3
+            Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:PutObjectAcl"
+            Resource: !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+
+  # --------------------------------------------------------------
+  # Attach IdentityPool ↔ Role mapping
+  # --------------------------------------------------------------
+  IdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref IdentityAuthPool
+      Roles:
+        authenticated: !GetAtt IdentityPoolRole.Arn
+
+      
+
+Outputs:
+  EditLabsDDBTableName:
+    Description: "EditLabs DynamoDB Table Name"
+    Value: !Ref EditLabsDDBTable

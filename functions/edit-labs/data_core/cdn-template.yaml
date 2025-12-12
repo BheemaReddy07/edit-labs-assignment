@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFront Distribution and S3 bucket for static site + API Gateway origin with Custom Domain
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name for the S3 bucket to create for static hosting.
+  CustomDomainName:
+    Type: String
+    Description: The custom domain name (e.g. dev.glidee.ai)
+  ACMCertificateArn:
+    Type: String
+    Description: ACM Certificate ARN in us-east-1 for CloudFront
+  ENV: # Added for completeness/future use, though not used in Resources here
+    Type: String
+    Description: "The deployment environment (dev, stage, prod)."
+
+Resources:
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${BucketName}-OAC"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  EditLabsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Best Practice: Add bucket encryption
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  EditLabsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    Properties:
+      Bucket: !Ref EditLabsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${EditLabsBucket}/*"
+            Condition:
+              StringEquals:
+                # This condition is correct for the S3/OAC setup.
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Static React App + API Gateway Routing with Custom Domain
+        Aliases:
+          - !Ref CustomDomainName
+        DefaultRootObject: index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref ACMCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: S3Origin
+            # Use the regional endpoint for secure OAC configurations
+            DomainName: !GetAtt EditLabsBucket.RegionalDomainName 
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponsePagePath: /index.html
+            ResponseCode: 200
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 403
+            ResponsePagePath: /index.html
+            ResponseCode: 200
+            ErrorCachingMinTTL: 300
+
+#ssm parameters
+  ParameterGlideeBucketsEditlabs:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ENV}/s3/edit-labs"
+      Type: String
+      Value: !Ref BucketName
+      Description: Editlabs bucket for EditLabs
+      Tier: Standard
+
+
+  # ParameterGlideeOrgMetaDataCDNDistributionId:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     Name: !Sub /${ENV}/cdn/distribution_id
+  #     Type: String
+  #     Value: !Ref CloudFrontDistribution
+  #     Description:  Org Metadata CDN Distribution ID
+  #     Tier: Standard     
+
+  # ParameterOrgMetaDataDistributionArn:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     Name: !Sub /${ENV}/cdn/distribution_arn
+  #     Type: String
+  #     Value: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+  #     Description: Org Metadata CDN Distribution ARN
+  #     Tier: Standard   
+
+Outputs:
+  # --------------------------------------------------------
+  # Outputs for Parent Stack to reference
+  # --------------------------------------------------------
+  EditLabsBucketName:
+    Description: The name of the created S3 bucket
+    Value: !Ref EditLabsBucket
+  
+  CloudFrontDomainName:
+    Description: CloudFront distribution domain
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  CloudFrontDistributionID:
+    Description: CloudFront distribution ID
+    Value: !Ref CloudFrontDistribution
+  
+  CustomDomainURL:
+    Description: Custom domain URL
+    Value: !Sub "https://${CustomDomainName}"
