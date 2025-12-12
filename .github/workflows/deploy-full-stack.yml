@@ -87,9 +87,9 @@ jobs:
           
           # Set Terraform state bucket name
           if [ "$ENV_LOWER" == "prod" ]; then
-            echo "TF_STATE_BUCKET=bucketforterraform-23" >> $GITHUB_ENV
+            echo "TF_STATE_BUCKET=bucketforterraform-bheema-23" >> $GITHUB_ENV
           else
-            echo "TF_STATE_BUCKET=bucketforterraform-23-$ENV_LOWER" >> $GITHUB_ENV
+            echo "TF_STATE_BUCKET=bucketforterraform-bheema-23-$ENV_LOWER" >> $GITHUB_ENV
           fi
 
       - name: Configure AWS credentials (OIDC)
