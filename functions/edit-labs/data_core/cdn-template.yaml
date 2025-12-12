@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: CloudFront Distribution and S3 bucket for static site + API Gateway origin (no custom domain)
+Description: CloudFront Distribution and S3 bucket for static site (no custom domain)
 
 Parameters:
   BucketName:
@@ -55,7 +55,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: Static React App + API Gateway Routing (no custom domain)
+        Comment: Static React App (no custom domain)
         DefaultRootObject: index.html
         Origins:
           - Id: S3Origin
@@ -79,7 +79,6 @@ Resources:
             ResponseCode: 200
             ErrorCachingMinTTL: 300
 
-  # SSM parameter for the bucket name
   ParameterGlideeBucketsEditlabs:
     Type: AWS::SSM::Parameter
     Properties:
@@ -101,5 +100,4 @@ Outputs:
   CloudFrontDistributionID:
     Description: CloudFront distribution ID
     Value: !Ref CloudFrontDistribution
-
-
+ 

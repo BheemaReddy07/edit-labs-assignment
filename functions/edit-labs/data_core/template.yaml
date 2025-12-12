@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Data core resources for database and storage.
+Description: Data core resources for database and storage (no external SSM ACM/domain/cognito dependencies).
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
@@ -8,41 +8,38 @@ Parameters:
     Description: "The deployment environment (dev, stage, prod)."
   S3BucketName:
     Type: String
-    Description: S3 bucket name edit-labs 
-    
+    Description: S3 bucket name edit-labs
 
 Resources:
   # The SSM Parameters
   ParameterGlideeTablesEditlabs:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub /${ENV}/tables/edit-labs   
+      Name: !Sub /${ENV}/tables/edit-labs
       Type: String
       Value: edit-labs
       Description: editlabs table
       Tier: Standard
 
-
-
   # DynamoDB Tables
-  
   EditLabsDDBTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     Properties:
-      TableName: edit-labs 
+      TableName: edit-labs
       AttributeDefinitions:
-      - AttributeName: org_id
-        AttributeType: S
-      - AttributeName: project_id
-        AttributeType: S
+        - AttributeName: org_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
       KeySchema:
-      - AttributeName: org_id
-        KeyType: HASH
-      - AttributeName: project_id
-        KeyType: RANGE
+        - AttributeName: org_id
+          KeyType: HASH
+        - AttributeName: project_id
+          KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
-  
+
+  # Nested CDN application (NO custom domain / NO ACM)
   EditLabsCDNApp:
     Type: AWS::Serverless::Application
     Properties:
@@ -50,28 +47,51 @@ Resources:
       Parameters:
         BucketName: !Ref S3BucketName
         ENV: !Ref ENV
-        CustomDomainName: !Sub '{{resolve:ssm:/${ENV}/cdn/edit-labs/domain}}'
-        ACMCertificateArn: !Sub '{{resolve:ssm:/${ENV}/acm/edit-labs/arn}}'
+        # NOTE: Removed CustomDomainName and ACMCertificateArn
 
-  ## identity pool
+  # -------------------------
+  # Cognito: User Pool & App (created locally)
+  # -------------------------
+  EditLabsUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "editlabs-userpool-${ENV}"
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireUppercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+
+  EditLabsUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "editlabs-client-${ENV}"
+      GenerateSecret: false
+      UserPoolId: !Ref EditLabsUserPool
+      AllowedOAuthFlowsUserPoolClient: false
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH
+        - USER_PASSWORD_AUTH
+
   IdentityAuthPool:
     Type: AWS::Cognito::IdentityPool
     Properties:
-      IdentityPoolName: !Sub "glidee-identity-pool"
-      AllowUnauthenticatedIdentities: false # only logged-in users can use AWS resources
+      IdentityPoolName: !Sub "glidee-identity-pool-${ENV}"
+      AllowUnauthenticatedIdentities: false
       CognitoIdentityProviders:
-        - ClientId: !Sub  '{{resolve:ssm:/${ENV}/auth/cognito_userpool_client_id}}'
-          ProviderName: !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/{{resolve:ssm:/${ENV}/auth/cognito_userpool_id}}'
+        - ClientId: !Ref EditLabsUserPoolClient
+          ProviderName: !Sub "cognito-idp.${AWS::Region}.amazonaws.com/${EditLabsUserPool}"
           ServerSideTokenCheck: true
 
-  # --------------------------------------------------------------
-  # Auth Role for Identity Pool
-  # (Will allow authenticated users to upload directly to S3)
-  # --------------------------------------------------------------
+  # Role for authenticated users
   IdentityPoolRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "identity-editlabs-role"
+      RoleName: !Sub "identity-editlabs-role-${ENV}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -85,16 +105,13 @@ Resources:
               "ForAnyValue:StringLike":
                 cognito-identity.amazonaws.com:amr: authenticated
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonCognitoPowerUser # helpful for Cognito federation
+        - arn:aws:iam::aws:policy/AmazonCognitoPowerUser
 
-  # --------------------------------------------------------------
-  # IAM Inline Policy (S3 Upload Permission for AUTHENTICATED USERS)
-  # Replace YOUR_BUCKET_NAME below
-  # --------------------------------------------------------------
+  # S3 Upload permission for authenticated users
   IdentityPoolAuthRolePolicy:
     Type: AWS::IAM::Policy
-    Properties: 
-      PolicyName: !Sub "s3-upload-policy"
+    Properties:
+      PolicyName: !Sub "s3-upload-policy-${ENV}"
       Roles:
         - !Ref IdentityPoolRole
       PolicyDocument:
@@ -107,10 +124,7 @@ Resources:
               - "s3:PutObjectAcl"
             Resource: !Sub "arn:aws:s3:::${S3BucketName}/*"
 
-
-  # --------------------------------------------------------------
   # Attach IdentityPool ↔ Role mapping
-  # --------------------------------------------------------------
   IdentityPoolRoleAttachment:
     Type: AWS::Cognito::IdentityPoolRoleAttachment
     Properties:
@@ -118,9 +132,19 @@ Resources:
       Roles:
         authenticated: !GetAtt IdentityPoolRole.Arn
 
-      
-
 Outputs:
   EditLabsDDBTableName:
     Description: "EditLabs DynamoDB Table Name"
     Value: !Ref EditLabsDDBTable
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref EditLabsUserPool
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref EditLabsUserPoolClient
+
+  IdentityPoolId:
+    Description: Cognito Identity Pool ID
+    Value: !Ref IdentityAuthPool
